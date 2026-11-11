@@ -4,12 +4,24 @@
   become: 'yes'
   ansible.builtin.reboot:
 
-## in case NetworkManager is not used, provide dhclient and bring up manually
 #- name: DHCP client for wlan0
 #  become: 'yes'
 #  shell: |
-#    killall dhclient
-#    dhclient wlan0
+#    rfkill unblock wifi
+#    ip link set wlan0 up
+#    wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+#    dhcpcd wlan0
+
+- name: Bring up WLAN for updates
+  become: yes
+  block:
+    - name: Unblock WiFi radio
+      ansible.builtin.command: rfkill unblock wifi
+
+    - name: Start wlan0 connection
+      community.general.nmcli:
+        conn_name: wlan0
+        state: up
 
 - name: Check usbsdmux already installed
   stat:
@@ -60,7 +72,6 @@
     
     - name: Clone, install usbsdmux and install requirements
       pip:
-#        name: git+https://github.com/pengutronix/usbsdmux
         name: git+https://github.com/linux-automation/usbsdmux
         virtualenv: /opt/labgrid-venv
     

@@ -11,8 +11,6 @@ ansible_python_interpreter: '/usr/bin/python3'
 
 packages:
   - vim
-  - vim-addon-manager
-  - vim-youcompleteme
   - emacs
   - wget
   - htop
@@ -23,6 +21,7 @@ packages:
   - sudo
   - libssl-dev
   - bison
+  - bmaptool
   - flex
   - bc
   - libncurses5-dev
@@ -66,7 +65,6 @@ packages:
   - astyle
   - exuberant-ctags
   - tree
-  - mc
   - colordiff
   - dos2unix
   - chrpath
@@ -76,8 +74,6 @@ packages:
   - libsdl1.2-dev
   - xterm
   - screen
-  - emacs-goodies-el
-  - exuberant-ctags
   - git-core
   - python3
   - python3-virtualenv
@@ -92,11 +88,9 @@ packages:
   - xxd
   - tftp-hpa
   - tftpd-hpa
-#  - dnsmasq
   - cmake
   - libftdi1-dev
   - zstd
   - gpiod
   - sshfs
-#  - lighttpd
   - iperf3

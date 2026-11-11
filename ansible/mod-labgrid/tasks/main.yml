@@ -4,31 +4,21 @@
   become: 'yes'
   ansible.builtin.reboot:
 
-## in case NetworkManager is not used, provide dhclient and bring up manually
-#- name: DHCP client for wlan0
-#  become: 'yes'
-#  shell: |
-#    killall dhclient
-#    dhclient wlan0
+- name: Bring up WLAN for updates
+  become: yes
+  block:
+    - name: Unblock WiFi radio
+      ansible.builtin.command: rfkill unblock wifi
 
-## check for conditionals
+    - name: Start wlan0 connection
+      community.general.nmcli:
+        conn_name: wlan0
+        state: up
 
 - name: Check virtualenv exists
   stat:
     path: /opt/labgrid-venv
   register: pip_virtualenv_installed
-
-- name: Check systemd service exists
-  stat:
-    path: /home/pi/README_labgrid.md
-  register: labgrid_exporter_exists
-
-- name: Check gpio26 systemd service exists
-  stat:
-    path: /etc/systemd/system/gpio26.service
-  register: gpio26_service_exists
-
-## install system and packages
 
 - name: Update and upgrade apt packages
   become: 'yes'
@@ -78,10 +68,60 @@
       - wheel
     virtualenv: /opt/labgrid-venv
 
-- name: Clone, install labgrid and install requirements
-  pip:
-    name: git+https://github.com/labgrid-project/labgrid
+## labgrid shipping and installation
+- name: Remove existing local tarball to ensure fresh pack
+  delegate_to: localhost
+  become: no
+  ansible.builtin.file:
+    path: "{{ role_path }}/files/labgrid.tar.gz"
+    state: absent
+
+- name: Create temporary staging directory
+  delegate_to: localhost
+  become: no
+  ansible.builtin.file:
+    path: "/tmp/staging/labgrid"
+    state: directory
+
+- name: Create a standalone git clone of the submodule for packaging
+  delegate_to: localhost
+  become: no
+  ansible.builtin.command:
+    cmd: "git clone --local --shared {{ role_path }}/files/labgrid /tmp/staging/labgrid"
+
+- name: Pack labgrid sources locally
+  delegate_to: localhost
+  become: no
+  community.general.archive:
+    path: "/tmp/staging/labgrid"
+    dest: "{{ role_path }}/files/labgrid.tar.gz"
+    format: gz
+
+- name: Clean up temporary local pack directory
+  delegate_to: localhost
+  become: no
+  ansible.builtin.file:
+    path: "/tmp/staging"
+    state: absent
+
+- name: Remove existing remote source folder to ensure fresh unpack
+  ansible.builtin.file:
+    path: /tmp/labgrid/
+    state: absent
+
+- name: Transfer and unpack labgrid on the RPi
+  ansible.builtin.unarchive:
+    src: labgrid.tar.gz
+    dest: /tmp/
+    owner: pi
+    group: pi
+    mode: '0755'
+
+- name: Install labgrid from the unpacked folder
+  ansible.builtin.pip:
+    name: /tmp/labgrid/
     virtualenv: /opt/labgrid-venv
+    state: forcereinstall
 
 ## add user pi to groups
 - name: Add user to several groups
@@ -91,79 +131,18 @@
     groups: dialout,plugdev,spi,i2c,gpio,disk 
     append: 'yes'
 
-## systemd gpio26 for power cycling
+## Reload Labgrid Exporter Setup
+- name: Reload systemd services
+  systemd:
+    daemon_reload: 'yes'
 
-- name: GPIO26 for DUT power control
-  block:
-    - name: Prepare GPIO26 script
-      copy:
-        src: _gpio.sh
-        dest: /usr/bin/_gpio.sh
-        mode: 755
-
-    - name: Link to GPIO26
-      ansible.builtin.file:
-        src: /usr/bin/_gpio.sh
-        dest: /usr/bin/gpio26.sh
-        state: link
-
-    - name: Add GPIO26 systemd service script
-      copy:
-        src: gpio26.service
-        dest: "{{ gpio26_service_path }}"
-        owner: root
-        group: root
-
-    - name: Reload systemd services
-      systemd:
-        daemon_reload: 'yes'
-  when: gpio26_service_exists.stat.exists == False
-  become: 'yes'
-
-## Labgrid Exporter Setup
-
-- name: Setup systemd
-  block:
-    - name: Copy /etc/tmpfiles.d files
-      ansible.builtin.copy:
-        src: systemd/tmpfiles.d/labgrid.conf
-        dest: /etc/tmpfiles.d
-
-    - name: Copy /usr/lib/sysusers.d files
-      ansible.builtin.copy:
-        src: systemd/sysusers.d/labgrid.conf
-        dest: /usr/lib/sysusers.d
-
-    - name: Copy systemd service
-      ansible.builtin.copy:
-        src: systemd/labgrid-exporter.service
-        dest: /etc/systemd/system
-
-    - name: Copy labgrid-exporter config file
-      ansible.builtin.copy:
-        src: exporter
-        dest: /etc/labgrid
-
-    - name: Link to active labgrid-exporter config file
-      ansible.builtin.file:
-        src: /etc/labgrid/exporter/config_mini.yml
-        dest: /etc/labgrid/exporter.yaml
-        state: link
-
-    - name: Reload systemd services
-      systemd:
-        daemon_reload: 'yes'
-
-    - name: Add Labgrid-Exporter README
-      copy:
-        src: README_labgrid.md
-        dest: /home/pi/
-        owner: pi
-        group: pi
-        mode: '0644'
-
-  when: labgrid_exporter_exists.stat.exists == False
-  become: 'yes'
+- name: Add Labgrid-Exporter README
+  copy:
+    src: README_labgrid.md
+    dest: /home/pi/
+    owner: pi
+    group: pi
+    mode: '0644'
 
 ## message of the day / greeter
 - name: Setup some message
