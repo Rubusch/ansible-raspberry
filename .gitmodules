@@ -1,0 +1,4 @@
+[submodule "ansible/mod-labgrid/files"]
+	path = ansible/mod-labgrid/files
+	url = git@github.com:Rubusch/labgrid.git
+	branch = lothar/stable-26.0
