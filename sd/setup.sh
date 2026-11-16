@@ -1,69 +1,55 @@
 #!/bin/sh -e
-##
-## provide e.g. /dev/sdh, when there is an /dev/sdh1 and /dev/sdh2
-## e.g.
-## $ ./setup.sh /dev/sdh place01 10.1.10.33
-##
-## - provide rootfs secrets and modifyable data under "secret"
-## - try to make sure you have sudo permissions
-
+## $ ./setup.sh /dev/sdh UNIT01
 die()
 {
 	echo "FAILED! $@"
 	exit 1
 }
 
-## 64-bit pi OS
 IMG="$( ls ../downloads/*-arm64-lite.img )"
-
-if [ $# -ne 3 ]; then
-	die "usage: ${0} <dev of SD card> [ <hostname> [ <static ip> ]]"
+if [ $# -ne 2 ]; then
+	die "usage: ${0} <dev of SD card> <hostname>"
 fi
 DEV="$1"
 test ! -e "$DEV" && die "'$DEV' does not exist!" || true
 
-HNAME="$2"
+HNAME="$( echo $2 | tr '[:upper:]' '[:lower:]' )"
+test -e ./overlay/${HNAME} || die "no configuration for hostname '$HNAME'"
 echo "using hostname '$HNAME'"
 
-IPADDR="$3"
-echo "using ipaddr '$IPADDR'"
+## prepare
+rm -rf ./boot || true
+cp -arf ./common/boot ./
+rm -rf ./rootfs || true
+cp -arf ./common/rootfs ./
+cp -arf ./overlay/${HNAME}/* ./rootfs/
 
 sudo dd if="$IMG" of="$DEV" bs=4M conv=fdatasync status=progress
 sleep 5
 
-## boot
+## install boot files
 BOOT="/run/media/$USER/bootfs"
 udisksctl mount -b "${DEV}1"
 ## /boot [fat32] won't keep protections, which will throw an error -> true
+## TODO this will change for ./boot/firmware/
 sudo cp -arfv ./boot/* "$BOOT"/ || true
 udisksctl unmount -b "${DEV}1"
 
-## rootfs (fix networking for initial ssh connection via eth0)
+## install rootfs files
 ROOTFS="/run/media/$USER/rootfs"
 udisksctl mount -b "${DEV}2"
 sudo cp -arfv ./rootfs/* "$ROOTFS/"
 
-## secret: /etc configs
-sudo cp -arfv ../secret/* "$ROOTFS/"
-sudo sed -i "/^127.0.1.1/s/.*/127.0.1.1           ${HNAME}/" $ROOTFS/etc/hosts
-echo "$HNAME" | sudo tee $ROOTFS/etc/hostname
-if [ IPADDR != "" ]; then
-	if [ -f $ROOTFS/etc/dnsmasq.conf ]; then
-		sudo sed -i "/^listen-address=/s/.*/listen-address=::1,127.0.0.1,${IPADDR}/" $ROOTFS/etc/dnsmasq.conf
-	fi
-	if [ -f $ROOTFS/etc/NetworkManager/system-connections/eth0.nmconnection ]; then
-		sudo sed -i "/address1=/s/.*/address1=${IPADDR}\/24/" $ROOTFS/etc/NetworkManager/system-connections/eth0.nmconnection
-		sudo chown root:root $ROOTFS/etc/NetworkManager/system-connections/eth0.nmconnection
-		sudo chmod 600 $ROOTFS/etc/NetworkManager/system-connections/eth0.nmconnection
-	else
-		sudo sed -i "/ *address /s/.*/    address ${IPADDR}/" $ROOTFS/etc/network/interfaces
-	fi
-fi
+## (2/2) /home/pi configs
 sudo chown -R 1000:1000 "$ROOTFS/home/pi"
 test -d "$ROOTFS/home/pi" && sudo chmod 700 "$ROOTFS/home/pi" || true
 test -d "$ROOTFS/home/pi/.ssh" && chmod 700 "$ROOTFS/home/pi/.ssh" || true
+test -f "$ROOTFS/etc/NetworkManager/NetworkManager.conf" && sudo chown root:root "$ROOTFS/etc/NetworkManager/NetworkManager.conf"
+test -d "$ROOTFS/etc/NetworkManager/system-connections" && sudo chown root:root "$ROOTFS/etc/NetworkManager/system-connections"/*
+test -d "$ROOTFS/etc/NetworkManager/system-connections" && sudo chmod 600 "$ROOTFS/etc/NetworkManager/system-connections"/*
 
-## rootfs - remove dhcpcd (we use dnsmasq)
-sudo rm -fv "$ROOTFS/etc/systemd/system/multi-user.target.wants/dhcpcd.service"
+## edit /etc/passwd, replace /usr/bin/nologin by /bin/bash
+sudo sed -i '/^pi:/ s|/usr/sbin/nologin|/bin/bash|' "$ROOTFS/etc/passwd"
+
 udisksctl unmount -b "${DEV}2"
 echo "READY."

@@ -1,0 +1,19 @@
+[Unit]
+Description=Labgrid Exporter
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Environment="PYTHONUNBUFFERED=1"
+# Should contain LG_COORDINATOR configuration
+EnvironmentFile=-/etc/environment
+ExecStart=/opt/labgrid-venv/bin/labgrid-exporter --hostname pi@unit04 -c 192.168.123.7:20408 /etc/labgrid/exporter.yaml
+Restart=always
+RestartSec=30
+DynamicUser=yes
+# Adjust to your distribution (most often "dialout" or "tty")
+SupplementaryGroups=dialout plugdev input netdev spi i2c gpio
+
+[Install]
+WantedBy=multi-user.target

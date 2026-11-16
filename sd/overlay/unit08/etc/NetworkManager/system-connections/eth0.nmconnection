@@ -1,0 +1,16 @@
+[connection]
+id=eth0
+type=ethernet
+interface-name=eth0
+autoconnect=yes
+
+[ethernet]
+
+[ipv4]
+address1=192.168.123.78/24,192.168.123.1
+method=manual
+dns=192.168.132.1;
+
+[ipv6]
+addr-gen-mode=default
+method=auto

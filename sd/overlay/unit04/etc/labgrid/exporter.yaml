@@ -1,0 +1,26 @@
+lab:
+  location: UNIT04
+
+  USBSerialPort:
+    match:
+      ID_SERIAL_SHORT: FTENC
+      ID_USB_INTERFACE_NUM: '01'
+
+  NetworkInterface:
+    ifname: "eth0"
+
+  NetworkService:
+    address: '192.168.123.74'
+    username: 'pi'
+
+  gpio5:
+    cls: GpiodGPIO
+    offset: 5
+
+  gpio6:
+    cls: GpiodGPIO
+    offset: 6
+
+  gpio26:
+    cls: GpiodGPIO
+    offset: 26

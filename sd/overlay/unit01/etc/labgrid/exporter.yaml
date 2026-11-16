@@ -1,0 +1,30 @@
+lab:
+  location: UNIT01
+
+  USBSerialPort:
+    match:
+      ID_SERIAL_SHORT: FTENC
+      ID_USB_INTERFACE_NUM: '01'
+
+  NetworkInterface: # ethernet
+    ifname: "eth0"
+
+  NetworkService:   # net to RPI
+    address: '192.168.132.71'
+    username: 'pi'
+
+  gpio5:
+    cls: GpiodGPIO
+    offset: 5
+
+  gpio6:
+    cls: GpiodGPIO
+    offset: 6
+
+  gpio16:
+    cls: GpiodGPIO
+    offset: 16
+
+  gpio26:
+    cls: GpiodGPIO
+    offset: 26

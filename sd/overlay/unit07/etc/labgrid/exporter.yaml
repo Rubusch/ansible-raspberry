@@ -1,0 +1,26 @@
+lab:
+  location: UNIT07
+
+  USBSerialPort:
+    match:
+      ID_PATH: platform-3f980000.usb-usb-0:1.1.3:1.1
+    speed: 115200
+
+  NetworkInterface:
+    ifname: eth0
+
+  NetworkService:
+    address: '192.168.123.77'
+    username: 'pi'
+
+  gpio5:
+    cls: GpiodGPIO
+    offset: 5
+
+  gpio6:
+    cls: GpiodGPIO
+    offset: 6
+
+  gpio26:
+    cls: GpiodGPIO
+    offset: 26
