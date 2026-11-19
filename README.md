@@ -4,12 +4,10 @@
 
 
 ## References
-
 https://docs.ansible.com/ansible/latest/user_guide/playbooks_intro.html
 
 
 ## Setup
-
 The installation needs a folder *secret* (not tracked) containing the credential files. *secret* is not checked in, and needs to be provided manually as shown below.  
 
 For my embedded automation controller the following shows a final setup:  
@@ -35,56 +33,82 @@ Ideally an ansible "role" (i.e. a module) will drop its usage as README file in 
 
 login: pi / xdr5XDR%  
 
+### IP ranges
+| IP             | hostname | setup         |
+| +------------- | +------- | +------------ |
+| 192.168.123.71 | unit01   | router        |
+| 192.168.123.72 | unit02   | Linux, SPI    |
+| 192.168.123.73 | unit03   | Linux, I2C    |
+| 192.168.123.74 | unit04   | Linux, custom |
+| 192.168.123.75 | unit05   | Zephyr        |
+| 192.168.123.76 | unit06   | Zephyr        |
+| 192.168.123.77 | unit07   | Zephyr        |
+| 192.168.123.78 | unit08   | Zephyr        |
 
 ## Preparation (first usage)
-
 On host PC  
 
 ```
-$ pip3 install --user ansible
+$ python3 -m venv ansible-venv
+$ . ./ansible-venv/bin/activate
+(ansible-venv)$ pip install --upgrade pip setuptools wheel
+
+(ansible-venv)$ pip install ansible
 ```
 
 ### 1. Download RPI/OS image (64 bit)
-
 Download a recent Raspi OS image for Raspi 4 or 3b [64 bit], plug SD card in reader  
 ```
 $ mkdir ./downloads
 $ cd ./downloads
-$ wget https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2026-04-13/2026-04-13-raspios-trixie-arm64-lite.img.xz
-$ unxz 2026-04-13-raspios-trixie-arm64-lite.img.xz
+$ wget https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+$ unxz 2026-10-06-raspios-trixie-arm64-lite.img.xz
 ```
 
 ### 2. SD card: Prepare Secrets
-
-Prepare the folder ``secret`` and provide content as follows. If several are prepared, usually link the correct "secret" folder to this possition.  
+Add secret information (e.g. wifi access) to this folder, not to be committed.
 ```
-$ mkdir ./sd/secret
-$ tree ./sd/secret/ -a
-./secret/
+$ tree -L 2 ./common/
+./common/
+├── boot
+│   ├── cmdline.txt
+│   ├── config.txt
+│   ├── ssh.txt
+│   └── userconf.txt
+└── rootfs
+    ├── boot
     ├── etc
-    │   ├── dnsmasq.conf
-    │   ├── hostname
-    │   ├── hosts
-    │   ├── network
-    │   │   └── interfaces
-    │   └── wpa_supplicant
-    │       └── wpa_supplicant.conf
-    └── home
-        └── pi
-            ├── .gitconfig
-            └── .ssh
-                └── authorized_keys
+    ├── home
+    └── usr
 ```
-Make sure that networking will work out for ansible, so typically provide:
-- hosts
+Individual files for the place exporters go here:
+```
+$ tree -L 2 ./overlay/
+./overlay/
+├── unit01
+│   └── etc
+├── unit02
+│   └── etc
+├── unit03
+│   └── etc
+├── unit04
+│   └── etc
+├── unit05
+│   └── etc
+├── unit06
+│   └── etc
+├── unit07
+│   └── etc
+└── unit08
+    └── etc
+```
+Make sure that SD card OS will work out for ansible, so typically check:
+- hostname
 - ip address
-- wifi access via `wpa_supplicant`
-- `authorized_keys`
-- hosts needs to be there, but hosts and hostname (in case created) will be updated to the arguments of the `setup.sh` script
-- any further configurations
+- wifi access
+- ssh `authorized_keys`
 
 ### 3. SD card: Flash the minimal Setup
-
 Plug card into the card reader. In case configure ./setup.sh to use the 64-bit or the 32-bit Pi OS image.   
 ```
 $ lsblk
@@ -94,81 +118,71 @@ $ cd ./sd
 $ ./setup.sh /dev/sdi unit01
     ...
     READY.
-$
 ```
-NB: If there is no `READY.` the SD card setup failed.  
+NB: If there is no `READY.` the SD card setup failed, check the error.  
 
-### 4. Prepare the Ansible setup
-
-- Configure the expected target IP in `./ansible/hosts`. For example, if the RPI will show up on IP **10.1.10.203 (static)**.
+### 4. Ansible: Prepare the setup
+- Configure the expected target IP in `./ansible/hosts`. For example, if the RPI will show up on IP **192.168.123.71 (static)**.
 - Configure the ssh key to use in `./ansible.cfg`, under `private_key_file`.
 - Configure the `rpi-conf.yml` to select which "roles" (modules) shall be added
 
-In case also configure
-- The files in `./ansible/mod-labgrid/files/` according to the setup, i.e. hostname, `labgrid-coordinator` IP, CTRL IP, etc. (symlinked)
-
-double-check, execute the following to find places to adjust to the current setup (ip and hostname), e.g.  
+In case also verify:
+- The files in `./ansible/mod-labgrid/files/`
+- find old config adjustments:
 ```
 $ grep '10\.1\.10' -HIirn ./ansible
 $ grep 'unit0' -HIirn ./ansible
 ```
 
-#### 4.1 QUICKFIX: Manually Configure Network on the RPi
-
-Since 2025 (end of 2024) `ifuptools2` is not installed anymore on Raspbian the default, also the `/etc/network/interfaces` may still block the `NetworkManager`, but cannot drive the interfaces as before (...)  
-
-current QUICKFIX:  
-=> Configure the network static ip address manually, e.g. ip 10.1.10.203/24
-- Put the SD card into the RPI
-- Connect serial and ethernet
-- On the serial terminal login, and do the following
-- Make sure `/etc/network/interfaces` does not contain entries for 'eth0'
-- Make sure `/etc/network/interfaces` does not contain entries for 'wlan0'
-```
-$ sudo nmcli con del "Wired connection 1"
-    Connection 'Wired connection 1' (211dbbb9-9bd1-3f7e-98a1-eefc05fbf30f) successfully deleted.
-$ sudo nmcli con add con-name "eth0" ifname eth0 type ethernet ip4 10.1.10.203/24
-    Connection 'eth0' (fc2ffed7-a14a-48aa-b77e-4dcb3faa1ffe) successfully added.
-$ sudo nmcli con up "eth0"
-    Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/4)
-```
-
-Then configure wireless for DHCP connection to local AP
-```
-$ sudo nmcli radio wifi on
-$ sudo nmcli device set wlan0 managed yes
-(in case check rfkill state, NB: when restarting networkmanager rfkill might be there again)
-$ sudo nmcli con add con-name "wlan0" ifname wlan0 type wifi ssid 'MY_SSID'
-$ sudo nmcli con modify wlan0 mode infrastructure
-$ sudo nmcli con modify wlan0 wifi-sec.key-mgmt wpa-psk
-$ sudo nmcli con modify wlan0 wifi-sec.psk "MY_PSK"
-$ sudo nmcli con up wlan0
-
-$ sudo reboot
-```
-The RPI should come up showing the correct ip address   
-
-TODO: improve this situation by provided configs (sd/secret)
-
 ### 5. Raspberry: Automized Setup
-
-Now Plug the card into the RPI. Connect ethernet to the RPI. Power the RPI.  
-(Optionally) update ssh ``known_hosts``  
+Now Plug the card into the RPI. Connect ethernet to the RPI. Power the RPI.   
 ```
-$ ssh-keygen -f ~/.ssh/known_hosts -R "10.1.10.203"
-$ ssh-keyscan 10.1.10.203 >> ~/.ssh/known_hosts
-    # 10.1.10.203:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
-    # 10.1.10.203:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
-    # 10.1.10.203:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
-    # 10.1.10.203:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
-    # 10.1.10.203:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
+$ cd ./ansible
+```
+
+Test network
+```
+$ ansible unit07 -m ping
+unit07 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/bin/python3.13"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+Dry-run (enter the target password once, when asked)
+```
+$ ansible-playbook site.yml --limit unit07 --check --diff -K
+```
+
+Execute ansible provisioning
+```
+$ ansible-playbook site.yml --limit unit07 -K
+    BECOME password:
+```
+- Enter user password
+- Wait ~60 min
+
+In case restart, if the provisioning runs into load issues..  
+
+#### 5.1 Quickfix: update ssh ``known_hosts`` (optionally)
+```
+$ ssh-keygen -f ~/.ssh/known_hosts -R "192.168.123.71"
+$ ssh-keyscan 192.168.123.71 >> ~/.ssh/known_hosts
+    # 192.168.123.71:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
+    # 192.168.123.71:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
+    # 192.168.123.71:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
+    # 192.168.123.71:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
+    # 192.168.123.71:22 SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1
 ```
 
 Verify the board is up and connection works out.  
 ```
 $ cd ./ansible
 $ ansible all -m ping
-    10.1.10.203 | SUCCESS => {
+    192.168.123.71 | SUCCESS => {
         "ansible_facts": {
             "discovered_interpreter_python": "/usr/bin/python"
         },
@@ -177,31 +191,15 @@ $ ansible all -m ping
     }
 ```
 
-Execute ansible provisioning, login a user eligible for sudo rights  
-```
-$ cd ./ansible
-$ ansible-playbook -K ./rpi-conf.yml
-    BECOME password:
-```
-- Enter user password
-- Wait ~60 min
-
-In case restart, if the provisioning runs into load issues..  
-
-
 ## Usage
-
-NB: there are still certain fixes to be done, see TODOs  
-
 ```
-$ ssh pi@10.1.10.203
+$ ssh pi@192.168.123.71
     login: pi
     password: xdr5XDR%
     (but should use certificate!)
 ```
 
 #### When working with screen
-
 ```
 $ screen
 
@@ -209,7 +207,6 @@ $ screen
 ```
 
 #### When working with Pengutronix labgrid
-
 ```
 $ sudo systemctl status labgrid-exporter
 ```
@@ -221,7 +218,6 @@ $ sudo systemctl start labgrid-exporter
 
 
 #### When working with Pengutronix usbsdmux / labgrid
-
 For the specific setting use `labgrid-suggest`...
 ```
 $ source /opt/labgrid-venv/bin/activate
@@ -252,14 +248,12 @@ switchover
 ```
 
 #### When working with pyrelayctl
-
 power the device  
 ```
 (labgrid-venv)$ relctl.py -d0 -t1
 ```
 
 #### When using GPIO26 and any relay
-
 power the device
 ```
 $ sudo systemctl start gpio26
@@ -274,7 +268,6 @@ In case of labgrid this is to be forwarded, then `lc power on` (if `labgrid-clie
 
 
 #### When working with serial connection
-
 in another screen session e.g. open a terminal  
 ```
 $ tio /dev/ttyUSB1
@@ -284,7 +277,6 @@ In case of labgrid this is to be forwareded, then `lc con` should provide the sh
 
 
 #### When working with xvcpi server
-
 in another screen session e.g. run xvcpi server  
 ```
 $ cd ./github__xvcpi
@@ -292,7 +284,6 @@ $ sudo xvcpi -v &
 ```
 
 #### When working with Xilinx `hw_server` (JTAG server)
-
 ```
 $ sudo systemctl start hw_server
 ```
@@ -302,9 +293,7 @@ NB: the server is highly (more or less) dependent on the installed version of Xi
 ansible installation.
 
 
-
 ## Development
-
 sd card mux  
 ref: https://www.linux-automation.com/usbsdmux-M01/  
 
@@ -325,7 +314,6 @@ $ make
 
 
 ## TODO
-
 - quickfix: dnsmasq keeps IP as listen ip, when adjusting IP needs to be mentioned how & where to change, too
 - quickfix: describe how and where to set hostname
 - Fix xvcpi JTAG forwareder not working
@@ -333,7 +321,6 @@ $ make
 
 
 ## Issues
-
 *issue*: how to change hostname in sd setup  
 
 fix: edit ``sd/rootfs/etc/hosts`` and ``sd/rootfs/etc/hostname``  
@@ -354,13 +341,13 @@ $ pip3 show ansible
 $ ansible raspi -m ping
 10.1.10.200 | UNREACHABLE! => {
     "changed": false,
-	    "msg": "Failed to connect to the host via ssh: @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\r\nIt is also possible that a host key has just been changed.\r\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:vH4JKH+RXxG85SiYz26U7xX7aCgZ1a/YqF5Ip643vVQ.\r\nPlease contact your system administrator.\r\nAdd correct host key in /home/user/.ssh/known_hosts to get rid of this message.\r\nOffending ECDSA key in /home/user/.ssh/known_hosts:78\r\n  remove with:\r\n  ssh-keygen -f \"/home/user/.ssh/known_hosts\" -R \"10.1.10.200\"\r\nHost key for 10.1.10.203 has changed and you have requested strict checking.\r\nHost key verification failed.",
+	    "msg": "Failed to connect to the host via ssh: @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\r\nIt is also possible that a host key has just been changed.\r\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:vH4JKH+RXxG85SiYz26U7xX7aCgZ1a/YqF5Ip643vVQ.\r\nPlease contact your system administrator.\r\nAdd correct host key in /home/user/.ssh/known_hosts to get rid of this message.\r\nOffending ECDSA key in /home/user/.ssh/known_hosts:78\r\n  remove with:\r\n  ssh-keygen -f \"/home/user/.ssh/known_hosts\" -R \"10.1.10.200\"\r\nHost key for 192.168.123.71 has changed and you have requested strict checking.\r\nHost key verification failed.",
 		    "unreachable": true
 			}
 ```
 *fix*: adjust .ssh/known_hosts  
 ```
-ssh-keygen -f "/home/user/.ssh/known_hosts" -R "10.1.10.203"
+ssh-keygen -f "/home/user/.ssh/known_hosts" -R "192.168.123.71"
 ```
 
 
