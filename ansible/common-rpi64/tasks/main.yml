@@ -1,206 +1,240 @@
 ---
-# tasks file for rpi
-- name: Fix login
-  become: 'yes'
-  ansible.builtin.command: raspi-config nonint do_boot_behaviour B2
-
-- name: Fix /usr/local permissions
-  become: 'yes'
-  ansible.builtin.file:
-    path: /usr/local
-    state: directory
-    recurse: yes
-    owner: pi
-    group: pi
-
-- name: Expand rootfs
-  become: 'yes'
-  ansible.builtin.command: raspi-config --expand-rootfs
-
-- name: Copy pi configs
-  copy:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    owner: pi
-    group: pi
-    mode: 0644
-  with_items:
-    - { src: home/pi/bashrc, dest: /home/pi/.bashrc }
-    - { src: home/pi/vimrc, dest: /home/pi/.vimrc }
-
-  ## actually, for python prefer virtualenv to force linking .local (dirty hack)
-- name: Symlink .local to /usr/local
-  file:
-    src: /usr/local
-    dest: "{{ ansible_env.HOME }}/.local"
-    owner: pi
-    group: pi
-    state: link
-
-- name: Copy etc configs
-  become: 'yes'
-  copy:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: 0755
-  with_items:
-    - { src: etc/apt, dest: /etc/apt }
-    - { src: etc/motion, dest: /etc/motion }
-    - { src: etc/screenrc, dest: /etc/screenrc }
-    - { src: etc/sudoers, dest: /etc/sudoers }
-    - { src: usr/share/polkit-1, dest: /usr/share/polkit-1 }
-
-- name: Reboot
-  become: 'yes'
-  ansible.builtin.reboot:
-
-- name: Fix NetworkManager file permissions
-  become: yes
+# ==============================================================================
+# PHASE 1: Ensure Wi-Fi Connectivity (for units reaching internet via WLAN)
+# ==============================================================================
+- name: Fix NetworkManager connection file permissions
+  become: true
   ansible.builtin.file:
     path: "/etc/NetworkManager/system-connections/{{ item }}"
     owner: root
     group: root
     mode: '0600'
-  with_items:
-    - "eth0.nmconnection"
-    - "eth0.{{ vlan_id}}.nmconnection"
-    - "wlan0.nmconnection"
-  ignore_errors: yes
+  loop:
+    - eth0.nmconnection
+    - wlan0.nmconnection
+  ignore_errors: true
 
-- name: Ensure WiFi is not hardware blocked
-  become: yes
-  ansible.builtin.command: rfkill unblock wifi
+- name: Bring up Wi-Fi if wlan0.nmconnection exists
+  become: true
+  block:
+    - name: Unblock Wi-Fi radio via rfkill
+      ansible.builtin.command: rfkill unblock wifi
+      changed_when: false
+
+    - name: Enable Wi-Fi radio in NetworkManager
+      ansible.builtin.command: nmcli radio wifi on
+      changed_when: false
+
+    - name: Reload NetworkManager connection profiles
+      ansible.builtin.command: nmcli connection reload
+      changed_when: false
+
+    - name: Read connection ID from wlan0.nmconnection
+      ansible.builtin.shell: awk -F= '/^id=/{print $2; exit}' /etc/NetworkManager/system-connections/wlan0.nmconnection
+      register: wlan_conn_id
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check active NetworkManager connection profiles
+      ansible.builtin.command: nmcli -t -f NAME connection show
+      register: nm_profiles
+      changed_when: false
+
+    - name: Activate Wi-Fi connection if profile is loaded
+      ansible.builtin.command: nmcli connection up "{{ wlan_conn_id.stdout | trim }}"
+      when:
+        - wlan_conn_id.stdout | trim | length > 0
+        - (wlan_conn_id.stdout | trim) in nm_profiles.stdout_lines
+      changed_when: false
+
+# ==============================================================================
+# PHASE 2: Basic Tooling (Needed before disk expansion)
+# ==============================================================================
+- name: Clean apt cache to ensure free space for basic tooling
+  become: true
+  ansible.builtin.command: apt-get clean
   changed_when: false
 
-- name: Force NetworkManager to reload files from disk
-  become: yes
-  ansible.builtin.command: nmcli connection reload
+- name: Install basic partitioning and filesystem tools
+  become: true
+  ansible.builtin.apt:
+    pkg: "{{ basic_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
 
-- name: Ensure wifi is powered on
-  become: yes
-  ansible.builtin.command: nmcli radio wifi on
+# ==============================================================================
+# PHASE 3: Root Filesystem Expansion & Reboot
+# ==============================================================================
+- name: Check root filesystem size in KB
+  ansible.builtin.shell: df --output=size / | tail -1
+  register: rootfs_size_kb
+  changed_when: false
 
-- name: Activate wlan0 connection
-  become: yes
-  ansible.builtin.command: nmcli connection up wlan0
-
-- name: Fix locales
-  become: 'yes'
-  become_flags: '-H -S -n'
+- name: Expand root partition and filesystem if smaller than 4GB
+  become: true
+  when: (rootfs_size_kb.stdout | trim | int) < 4194304
   block:
-    - name: rpi/locales - Install locales
+    - name: Detect root block device and partition number
+      ansible.builtin.shell: |
+        ROOT_PART=$(findmnt -n -o SOURCE /)
+        ROOT_DISK="/dev/$(lsblk -no pkname "$ROOT_PART")"
+        PART_NUM=$(cat /sys/class/block/$(basename "$ROOT_PART")/partition)
+        echo "${ROOT_DISK} ${PART_NUM} ${ROOT_PART}"
+      register: root_dev_info
+      changed_when: false
+
+    - name: Resize root partition to 100% of disk
+      ansible.builtin.command: >
+        parted -s {{ root_dev_info.stdout.split()[0] }}
+        resizepart {{ root_dev_info.stdout.split()[1] }} 100%
+      changed_when: true
+
+    - name: Reboot and wait for host to come back online
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        post_reboot_delay: 15
+        test_command: uptime
+
+    - name: Resize ext4 filesystem to fill expanded partition
+      ansible.builtin.command: resize2fs {{ root_dev_info.stdout.split()[2] }}
+      changed_when: true
+
+# ==============================================================================
+# PHASE 4: System Config, Locales & Common Packages
+# ==============================================================================
+- name: Set default systemd target to multi-user (CLI)
+  become: true
+  ansible.builtin.command: systemctl set-default multi-user.target
+  changed_when: false
+
+- name: Ensure getty@tty1 drop-in directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/getty@tty1.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure console autologin for pi user via systemd
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/getty@tty1.service.d/autologin.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=-/sbin/agetty --autologin pi --noclear %I $TERM
+
+- name: Set timezone symlink
+  become: true
+  ansible.builtin.file:
+    src: /usr/share/zoneinfo/Europe/Zurich
+    dest: /etc/localtime
+    state: link
+    force: true
+
+- name: Set /etc/timezone
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/timezone
+    content: "Europe/Zurich\n"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy pi user configs
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: pi
+    group: pi
+    mode: '0644'
+  loop:
+    - { src: home/pi/bashrc, dest: /home/pi/.bashrc }
+    - { src: home/pi/vimrc, dest: /home/pi/.vimrc }
+
+- name: Copy system configs
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: etc/apt/sources.list, dest: /etc/apt/sources.list, mode: '0644' }
+    - { src: etc/motion, dest: /etc/motion, mode: '0755' }
+    - { src: etc/screenrc, dest: /etc/screenrc, mode: '0644' }
+    - { src: etc/sudoers, dest: /etc/sudoers, mode: '0440' }
+    - { src: usr/share/polkit-1, dest: /usr/share/polkit-1, mode: '0755' }
+
+- name: Configure system locales
+  become: true
+  block:
+    - name: Install locales package
       ansible.builtin.apt:
-        update_cache: yes
-        cache_valid_time: 3600
         name: locales
-
-    - name: Ensure localisation files for '{{ config_system_locale }}' are available
-      locale_gen:
-        name: "{{ config_system_locale }}"
         state: present
 
-    - name: Ensure localisation files for '{{ config_system_language }}' are available
-      locale_gen:
-        name: "{{ config_system_language }}"
+    - name: Generate required locales
+      community.general.locale_gen:
+        name: "{{ item }}"
         state: present
+      loop:
+        - "{{ config_system_locale }}"
+        - "{{ config_system_language }}"
 
-    - name: Configure system locale (Debian/RPi way)
-      copy:
+    - name: Set default locale file
+      ansible.builtin.copy:
         dest: /etc/default/locale
+        mode: '0644'
         content: |
           LANG={{ config_system_locale }}
           LANGUAGE={{ config_system_language }}
           LC_ALL={{ config_system_locale }}
 
-    - name: Reconfigure locales non-interactively
-      command: dpkg-reconfigure -f noninteractive locales
+- name: Repair any interrupted dpkg or apt state
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  ansible.builtin.command: >
+    apt-get -f install -y
+    -o Dpkg::Options::="--force-confdef"
+    -o Dpkg::Options::="--force-confold"
+  changed_when: false
 
-    - name: Reboot
-      ansible.builtin.reboot:
+- name: Configure apt to use low-memory internal solver
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99lowmem-solver
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      APT::Solver "internal";
 
-- name: Bring up WLAN for updates
-  become: yes
-  block:
-    - name: Unblock WiFi radio
-      ansible.builtin.command: rfkill unblock wifi
-
-    - name: Start wlan0 connection
-      community.general.nmcli:
-        conn_name: wlan0
-        state: up
-
-- name: Update apt packages
-  become: 'yes'
+- name: Install common packages
+  become: true
   ansible.builtin.apt:
-    update_cache: 'yes'
-    cache_valid_time: 86400 # one day
+    pkg: "{{ common_packages }}"
+    state: present
+    update_cache: true
+    dpkg_options: 'force-confdef,force-confold'
 
-- name: Install package list
-  become: 'yes'
+- name: Clean up unused apt packages
+  become: true
   ansible.builtin.apt:
-    pkg: "{{ packages }}"
-    state: latest
+    autoclean: true
+    autoremove: true
 
-- name: Reboot
-  become: 'yes'
-  ansible.builtin.reboot:
-
-- name: Bring up WLAN for updates
-  become: yes
-  block:
-    - name: Unblock WiFi radio
-      ansible.builtin.command: rfkill unblock wifi
-
-    - name: Start wlan0 connection
-      community.general.nmcli:
-        conn_name: wlan0
-        state: up
-
-- name: Enable ssh
-  become: 'yes'
-  systemd:
+- name: Ensure SSH service is enabled and running
+  become: true
+  ansible.builtin.systemd:
     name: ssh.service
     enabled: true
-    masked: no
-
-- name: fix timezone to Europe/Zurich
-  become: 'yes'
-  shell: |
-    mv /etc/localtime /etc/localtime-wtf
-    ln -s /usr/share/zoneinfo/Europe/Zurich /etc/localtime
-
-- name: Autoclean package list
-  become: 'yes'
-  ansible.builtin.apt:
-    autoclean: yes
-
-- name: Autoremove dependencies no longer required
-  become: 'yes'
-  ansible.builtin.apt:
-    autoremove: yes
-
-- name: Reboot
-  become: 'yes'
-  ansible.builtin.reboot:
-
-- name: Bring up WLAN for updates
-  become: yes
-  block:
-    - name: Unblock WiFi radio
-      ansible.builtin.command: rfkill unblock wifi
-
-    - name: Start wlan0 connection
-      community.general.nmcli:
-        conn_name: wlan0
-        state: up
-
-- name: Enable ssh
-  become: 'yes'
-  systemd:
-    name: ssh.service
-    enabled: true
-    masked: no
-
-- name: All done!
-  debug:
-    msg: Packages have been successfully installed
+    masked: false
+    state: started

@@ -1,18 +1,22 @@
+---
 - name: Raspberry Provisioning
-  hosts: raspi
+  hosts: labgrid_exporters
   become: 'no'
   tasks:
     - name: Common RPI
-      import_role:
+      ansible.builtin.import_role:
         name: common-rpi64
+      tags: common
 
     - name: Labgrid
-      import_role:
+      ansible.builtin.import_role:
         name: mod-labgrid
+      tags: labgrid
 
     - name: USB-SD Mux
-      import_role:
+      ansible.builtin.import_role:
         name: mod-usbsdmux
+      tags: usbsdmux
 
 #    - name: Docker setup
 #      import_role:

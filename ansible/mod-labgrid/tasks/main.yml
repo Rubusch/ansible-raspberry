@@ -1,157 +1,71 @@
 ---
 # tasks file for labgrid provisioning as labgrid-exporter
-- name: Reboot
-  become: 'yes'
-  ansible.builtin.reboot:
+- name: Install required system packages for Labgrid
+  become: true
+  ansible.builtin.apt:
+    pkg:
+      - python3-venv
+      - python3-pip
+      - ser2net
+      - microcom
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
 
-- name: Bring up WLAN for updates
-  become: yes
-  block:
-    - name: Unblock WiFi radio
-      ansible.builtin.command: rfkill unblock wifi
-
-    - name: Start wlan0 connection
-      community.general.nmcli:
-        conn_name: wlan0
-        state: up
-
-- name: Check virtualenv exists
-  stat:
+- name: Ensure /opt/labgrid-venv directory exists and is owned by pi
+  become: true
+  ansible.builtin.file:
     path: /opt/labgrid-venv
-  register: pip_virtualenv_installed
-
-- name: Update and upgrade apt packages
-  become: 'yes'
-  ansible.builtin.apt:
-    upgrade: 'yes'
-    update_cache: 'yes'
-
-- name: Install packages
-  become: 'yes'
-  ansible.builtin.apt:
-    pkg: "{{ item }}"
-  with_items:
-    - python3
-    - python3-virtualenv
-    - python3-pip
-    - python3-setuptools
-    - virtualenv
-    - ser2net
-    - microcom
-
-- name: Change permission for /opt
-  become: 'yes'
-  ansible.builtin.file:
-    dest: "/opt"
-    owner: pi
-    group: pi
-    recurse: 'yes'
-
-- name: Create virtualenv
-  command:
-    cmd: virtualenv /opt/labgrid-venv -p python3
-    creates: "labgrid-venv"
-  when: pip_virtualenv_installed.stat.exists == False
-
-## pyserial: this version should be used (10/2022)
-- name: Fix pyserial reinstall
-  pip:
-    name: https://github.com/labgrid-project/pyserial/archive/v3.4.0.1.zip#egg=pyserial
-    state: forcereinstall
-    virtualenv: /opt/labgrid-venv
-
-- name: Install python packages
-  become: 'yes'
-  pip:
-    name:
-      - setuptools
-      - wheel
-    virtualenv: /opt/labgrid-venv
-
-## labgrid shipping and installation
-- name: Remove existing local tarball to ensure fresh pack
-  delegate_to: localhost
-  become: no
-  ansible.builtin.file:
-    path: "{{ role_path }}/files/labgrid.tar.gz"
-    state: absent
-
-- name: Create temporary staging directory
-  delegate_to: localhost
-  become: no
-  ansible.builtin.file:
-    path: "/tmp/staging/labgrid"
     state: directory
-
-- name: Create a standalone git clone of the submodule for packaging
-  delegate_to: localhost
-  become: no
-  ansible.builtin.command:
-    cmd: "git clone --local --shared {{ role_path }}/files/labgrid /tmp/staging/labgrid"
-
-- name: Pack labgrid sources locally
-  delegate_to: localhost
-  become: no
-  community.general.archive:
-    path: "/tmp/staging/labgrid"
-    dest: "{{ role_path }}/files/labgrid.tar.gz"
-    format: gz
-
-- name: Clean up temporary local pack directory
-  delegate_to: localhost
-  become: no
-  ansible.builtin.file:
-    path: "/tmp/staging"
-    state: absent
-
-- name: Remove existing remote source folder to ensure fresh unpack
-  ansible.builtin.file:
-    path: /tmp/labgrid/
-    state: absent
-
-- name: Transfer and unpack labgrid on the RPi
-  ansible.builtin.unarchive:
-    src: labgrid.tar.gz
-    dest: /tmp/
     owner: pi
     group: pi
     mode: '0755'
 
-- name: Install labgrid from the unpacked folder
+- name: Initialize venv and install base build tools
   ansible.builtin.pip:
-    name: /tmp/labgrid/
+    name:
+      - pip
+      - setuptools
+      - wheel
+    state: latest
     virtualenv: /opt/labgrid-venv
-    state: forcereinstall
+    virtualenv_command: python3 -m venv
 
-## add user pi to groups
-- name: Add user to several groups
-  become: 'yes'
+- name: Copy local labgrid sources to /tmp/labgrid on RPi
+  ansible.posix.synchronize:
+    src: "{{ role_path }}/files/"
+    dest: /tmp/labgrid/
+    delete: true
+    rsync_opts:
+      - "--exclude=.git"
+
+- name: Install local labgrid into /opt/labgrid-venv
+  environment:
+    SETUPTOOLS_SCM_PRETEND_VERSION: "26.0.0"
+  ansible.builtin.pip:
+    name: /tmp/labgrid
+    state: forcereinstall
+    virtualenv: /opt/labgrid-venv
+
+- name: Clean up /tmp/labgrid on RPi
+  ansible.builtin.file:
+    path: /tmp/labgrid
+    state: absent
+
+- name: Add user pi to hardware access groups
+  become: true
   ansible.builtin.user:
     name: pi
-    groups: dialout,plugdev,spi,i2c,gpio,disk 
-    append: 'yes'
+    groups:
+      - dialout
+      - plugdev
+      - spi
+      - i2c
+      - gpio
+      - disk
+    append: true
 
-## Reload Labgrid Exporter Setup
-- name: Reload systemd services
-  systemd:
-    daemon_reload: 'yes'
-
-- name: Add Labgrid-Exporter README
-  copy:
-    src: README_labgrid.md
-    dest: /home/pi/
-    owner: pi
-    group: pi
-    mode: '0644'
-
-## message of the day / greeter
-- name: Setup some message
-  become: 'yes'
-  copy:
-    src: motd
-    dest: /etc/motd
-    mode: 0644
-
-- name: All done!
-  debug:
-    msg: Labgrid installed
+- name: Reload systemd daemon
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
