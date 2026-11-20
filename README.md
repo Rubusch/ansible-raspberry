@@ -122,25 +122,13 @@ $ ./setup.sh /dev/sdi unit01
 NB: If there is no `READY.` the SD card setup failed, check the error.  
 
 ### 4. Ansible: Prepare the setup
-- Configure the expected target IP in `./ansible/hosts`. For example, if the RPI will show up on IP **192.168.123.71 (static)**.
-- Configure the ssh key to use in `./ansible.cfg`, under `private_key_file`.
-- Configure the `rpi-conf.yml` to select which "roles" (modules) shall be added
-
-In case also verify:
-- The files in `./ansible/mod-labgrid/files/`
-- find old config adjustments:
-```
-$ grep '10\.1\.10' -HIirn ./ansible
-$ grep 'unit0' -HIirn ./ansible
-```
-
-### 5. Raspberry: Automized Setup
-Now Plug the card into the RPI. Connect ethernet to the RPI. Power the RPI.   
+check configuration
 ```
 $ cd ./ansible
+$ ansible-inventory --graph
 ```
 
-Test network
+Now Plug the card into the RPI. Connect ethernet to the RPI. Power the RPI. Test network.  
 ```
 $ ansible unit07 -m ping
 unit07 | SUCCESS => {
@@ -152,6 +140,7 @@ unit07 | SUCCESS => {
 }
 ```
 
+### 5. Raspberry: Automized Setup
 Dry-run (enter the target password once, when asked)
 ```
 $ ansible-playbook site.yml --limit unit07 --check --diff -K
