@@ -21,10 +21,6 @@ lab:
     cls: GpiodGPIO
     offset: 6
 
-  gpio16:
-    cls: GpiodGPIO
-    offset: 16
-
   gpio26:
     cls: GpiodGPIO
     offset: 26

@@ -7,10 +7,10 @@ lab:
       ID_USB_INTERFACE_NUM: '01'
 
   NetworkInterface:
-    ifname: "eth0"
+    ifname: eth0
 
   NetworkService:
-    address: '192.168.132.72'
+    address: '192.168.123.72'
     username: 'pi'
 
   gpio5:
