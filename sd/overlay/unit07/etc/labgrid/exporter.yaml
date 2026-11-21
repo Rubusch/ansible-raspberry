@@ -13,14 +13,6 @@ lab:
     address: '192.168.123.77'
     username: 'pi'
 
-  gpio5:
-    cls: GpiodGPIO
-    offset: 5
-
-  gpio6:
-    cls: GpiodGPIO
-    offset: 6
-
   gpio26:
-    cls: GpiodGPIO
-    offset: 26
+    cls: SysfsGPIO
+    index: 538
